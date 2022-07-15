@@ -1,7 +1,10 @@
-import {downloadCache, getCacheVersion} from '../src/internal/cacheHttpClient'
+import {downloadCache, getCacheVersion, localCachePath} from '../src/internal/cacheHttpClient'
 import {CompressionMethod} from '../src/internal/constants'
 import * as downloadUtils from '../src/internal/downloadUtils'
 import {DownloadOptions, getDownloadOptions} from '../src/options'
+import * as os from 'os'
+import {promises as fs} from 'fs'
+import * as path from 'path'
 
 jest.mock('../src/internal/downloadUtils')
 
@@ -138,4 +141,101 @@ test('downloadCache uses http-client when overridden', async () => {
   )
 
   expect(downloadCacheStorageSDKMock).toHaveBeenCalledTimes(0)
+})
+
+async function setupLocalCache(): Promise<string> {
+  const localRoot = path.join(os.tmpdir(), "localRoot")
+  await fs.rmdir(localRoot, {recursive: true})
+  await fs.mkdir(localRoot, {recursive: true})
+  return localRoot
+}
+
+test('downloadCache returns the file from the local filesystem if present', async () => {
+  const downloadCacheHttpClientMock = jest.spyOn(
+    downloadUtils,
+    'downloadCacheHttpClient'
+  )
+  const downloadCacheStorageSDKMock = jest.spyOn(
+    downloadUtils,
+    'downloadCacheStorageSDK'
+  )
+
+  const archiveLocation = 'http://foo.blob.core.windows.net/bar/baz'
+  const localRoot = await setupLocalCache()
+  const archivePath = path.join(localRoot, "archivePath")
+
+  const options: DownloadOptions = {localCacheRoot: localRoot}
+  const localPath = localCachePath(archiveLocation, options) as string
+  expect(localPath).not.toBeNull()
+
+  await fs.writeFile(localPath, "I am some cached data")
+
+  await downloadCache(archiveLocation, archivePath, options)
+
+  expect(downloadCacheHttpClientMock).toHaveBeenCalledTimes(0)
+  expect(downloadCacheStorageSDKMock).toHaveBeenCalledTimes(0)
+
+  let data = await fs.readFile(archivePath, 'utf8')
+  expect(data).toEqual("I am some cached data")
+})
+
+test('downloadCache updates the modification timestamp when downloading', async () => {
+  const archiveLocation = 'http://foo.blob.core.windows.net/bar/baz'
+  const localRoot = await setupLocalCache()
+  const archivePath = path.join(localRoot, "archivePath")
+
+  const options: DownloadOptions = {localCacheRoot: localRoot}
+  const localPath = localCachePath(archiveLocation, options) as string
+  expect(localPath).not.toBeNull()
+
+  await fs.writeFile(localPath, "I am some cached data")
+  const ms = new Date()
+  ms.setDate(ms.getDate() - 1)
+  await fs.utimes(localPath, ms, ms)
+
+  const oldStat = await fs.stat(localPath)
+
+  await downloadCache(archiveLocation, archivePath, options)
+  const newStat = await fs.stat(localPath)
+  expect(newStat.mtimeMs).toBeGreaterThan(oldStat.mtimeMs)
+})
+
+test('downloadCache uses the HTTP client as normal for a local cache miss', async () => {
+  const downloadCacheStorageSDKMock = jest.spyOn(
+    downloadUtils,
+    'downloadCacheStorageSDK'
+  )
+  console.log("cache miss?")
+  const archiveLocation = 'http://foo.blob.core.windows.net/bar/baz'
+
+  const localRoot = await setupLocalCache()
+  const archivePath = path.join(localRoot, "archivePath")
+
+  const options: DownloadOptions = {localCacheRoot: localRoot}
+  const localPath = localCachePath(archiveLocation, options) as string
+  expect(localPath).not.toBeNull()
+
+  await downloadCache(archiveLocation, archivePath, options)
+  expect(downloadCacheStorageSDKMock).toHaveBeenCalledTimes(1)
+})
+
+test('downloadCache stores the file in the local cache after a cache miss', async () => {
+  const downloadCacheStorageSDKMock = jest.spyOn(
+    downloadUtils,
+    'downloadCacheStorageSDK'
+  ).mockImplementation(async (archiveLocation, archivePath, options) => {
+    await fs.writeFile(archivePath, "I am the data that was just downloaded")
+  })
+
+  const archiveLocation = 'http://foo.blob.core.windows.net/bar/baz'
+  const localRoot = await setupLocalCache()
+  const archivePath = path.join(localRoot, "archivePath")
+
+  const options: DownloadOptions = {localCacheRoot: localRoot}
+  const localPath = localCachePath(archiveLocation, options) as string
+  expect(localPath).not.toBeNull()
+
+  await downloadCache(archiveLocation, archivePath, options)
+
+  expect(await fs.readFile(localPath, 'utf8')).toEqual("I am the data that was just downloaded")
 })

@@ -46,6 +46,14 @@ export interface DownloadOptions {
    * @default 30000
    */
   timeoutInMs?: number
+
+  /**
+   * An optional local filesystem path to consult (and update) with a
+   * local cache of any downloaded files.
+   *
+   * @default null
+   */
+  localCacheRoot?: string
 }
 
 /**
@@ -99,11 +107,16 @@ export function getDownloadOptions(copy?: DownloadOptions): DownloadOptions {
     if (typeof copy.timeoutInMs === 'number') {
       result.timeoutInMs = copy.timeoutInMs
     }
+
+    if (typeof copy.localCacheRoot === 'string') {
+      result.localCacheRoot = copy.localCacheRoot
+    }
   }
 
   core.debug(`Use Azure SDK: ${result.useAzureSdk}`)
   core.debug(`Download concurrency: ${result.downloadConcurrency}`)
   core.debug(`Request timeout (ms): ${result.timeoutInMs}`)
+  core.debug(`Local cache root: ${result.localCacheRoot}`)
 
   return result
 }

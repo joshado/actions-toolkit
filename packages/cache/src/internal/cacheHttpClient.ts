@@ -6,6 +6,7 @@ import {
   TypedResponse
 } from '@actions/http-client/lib/interfaces'
 import * as crypto from 'crypto'
+import {promises as fsp} from 'fs'
 import * as fs from 'fs'
 import {URL} from 'url'
 
@@ -31,6 +32,8 @@ import {
   retryHttpClientResponse,
   retryTypedResponse
 } from './requestUtils'
+
+import * as path from 'path'
 
 const versionSalt = '1.0'
 
@@ -122,14 +125,35 @@ export async function getCacheEntry(
   return cacheResult
 }
 
+export function localCachePath(archiveLocation: string, options?: DownloadOptions): string | null {
+  const localRoot = options?.localCacheRoot
+  if(localRoot != null) {
+    return path.join(localRoot, crypto.createHash('md5').update(archiveLocation).digest("hex"))
+  } else {
+    return null
+  }
+}
+
 export async function downloadCache(
   archiveLocation: string,
   archivePath: string,
   options?: DownloadOptions
 ): Promise<void> {
-  const archiveUrl = new URL(archiveLocation)
   const downloadOptions = getDownloadOptions(options)
+  const localPath = localCachePath(archiveLocation, downloadOptions)
 
+  if (localPath && fs.existsSync(localPath) ) {
+    try {
+      await fsp.copyFile(localPath, archivePath, fs.constants.COPYFILE_FICLONE)
+      const date = new Date()
+      await fsp.utimes(localPath, date, date)
+      return
+    } catch {
+      core.error(`Failed to read local cache at path: ${localPath}`)
+    }
+  }
+
+  const archiveUrl = new URL(archiveLocation)
   if (
     downloadOptions.useAzureSdk &&
     archiveUrl.hostname.endsWith('.blob.core.windows.net')
@@ -139,6 +163,16 @@ export async function downloadCache(
   } else {
     // Otherwise, download using the Actions http-client.
     await downloadCacheHttpClient(archiveLocation, archivePath)
+  }
+
+  // if something was written to archivePath then let's stash that away in our
+  // local cache for future use!
+  if (localPath && archivePath && fs.existsSync(archivePath) && !fs.existsSync(localPath)) {
+    try {
+      await fsp.copyFile(archivePath, localPath, fs.constants.COPYFILE_FICLONE)
+    } catch {
+      core.error(`Failed to write local cache to path: ${localPath}`)
+    }
   }
 }
 
